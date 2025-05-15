@@ -2,7 +2,7 @@ from esphome import automation
 import esphome.codegen as cg
 import esphome.config_validation as cv
 from esphome.components import uart, sensor
-from esphome.const import UNIT_CENTIMETER, ICON_WAVES, DEVICE_CLASS_DISTANCE
+from esphome.const import UNIT_CENTIMETER, DEVICE_CLASS_DISTANCE
 
 DEPENDENCIES = ["uart"]
 
