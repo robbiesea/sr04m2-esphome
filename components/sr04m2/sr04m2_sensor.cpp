@@ -1,26 +1,18 @@
-#include "esphome.h"
+#pragma once
 
-class SR04M2Sensor : public Component, public UARTDevice, public Sensor {
+#include "esphome/core/component.h"
+#include "esphome/components/uart/uart.h"
+#include "esphome/components/sensor/sensor.h"
+
+namespace esphome {
+namespace sr04m2 {
+
+class SR04M2Sensor : public sensor::Sensor, public PollingComponent, public uart::UARTDevice {
  public:
-  SR04M2Sensor(UARTComponent *parent) : UARTDevice(parent) {}
-
-  void setup() override {
-    // Called when ESP boots
-  }
-
-  void loop() override {
-    if (available() >= 4) {
-      uint8_t header = read();
-      if (header == 0xFF) {
-        uint8_t high = read();
-        uint8_t low = read();
-        uint8_t sum = read();
-
-        if (((high + low) & 0xFF) == sum) {
-          int distance = (high << 8) + low;
-          publish_state(distance);
-        }
-      }
-    }
+  void update() override {
+    // TODO: Add UART read logic here
   }
 };
+
+}  // namespace sr04m2
+}  // namespace esphome
