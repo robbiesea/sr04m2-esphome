@@ -1,0 +1,150 @@
+esphome:
+  name: frank-the-tank
+  friendly_name: "Frank the Tank"
+
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+
+# WiFi Configuration
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  # Fixed the IP configuration to match your gateway subnet
+  manual_ip:
+    static_ip:  !secret static_ip    # Changed to match your gateway subnet
+    gateway: !secret gateway   # Your router's IP address
+    subnet:   !secret subnet    # Your network subnet
+
+  # Enable fallback hotspot if WiFi connection fails
+  ap:
+    ssid: "Frank The Tank Fallback"
+    password: "tankmaster123"
+    
+  # First time setup - use this if having connection issues
+  use_address: frank-the-tank.local
+
+# I2C Bus Configuration with debug
+i2c:
+  sda: 21
+  scl: 22
+  scan: true
+  id: bus_a
+  frequency: 100kHz  # Try a lower frequency for stability
+
+# Enable debug logging
+logger:
+  level: DEBUG
+  logs:
+    i2c: DEBUG      # Debug I2C issues
+    display: DEBUG  # Debug display issues
+    sensor: DEBUG   # Debug sensor issues
+
+# API Configuration for Home Assistant
+api:
+  encryption:
+    key: "SGaGLKg0Yop8wQ5F5U0pwnI2jSKPK78QvPg/dbOP3WE="
+
+ota:
+  platform: esphome
+  password: "637f2f35b83d4dfccf54395b44e70ea4"
+
+# Display Font
+font:
+  - file: "fonts/Roboto-Regular.ttf"
+    id: font1
+    size: 14
+
+# OLED Display Configuration with update interval
+display:
+  - platform: ssd1306_i2c
+    model: "SSD1306 128x64"
+    address: 0x3C
+    id: my_display
+    update_interval: 1s  # Make sure display updates regularly
+    lambda: |-
+      it.fill(Color::BLACK);
+      
+      // Show static text even if sensors aren't working yet
+      it.print(0, 0, id(font1), "|  |");
+      
+      // Only try to show sensor values if they're valid
+      if (id(tank_distance).has_state()) {
+        it.print(0, 16, id(font1), (to_string(int(id(tank_distance).state)) + " cm / " + to_string(int(id(tank_level).state)) + "%").c_str());
+      } else {
+        it.print(0, 16, id(font1), "");
+      }
+      
+      if (id(tank_level).has_state()) {
+        it.print(0, 32, id(font1), (to_string(int(id(tank_level).state)) + "%").c_str());
+      } else {
+        it.print(0, 32, id(font1), "");
+      }
+      
+      it.print(0, 48, id(font1), "Status: OK");
+
+uart:
+  id: uart_bus
+  rx_pin: GPIO13
+  tx_pin: GPIO4
+  baud_rate: 9600
+
+sensor:
+  - platform: sr04m2
+    uart_id: uart_bus
+    name: "Tank Distance"
+    id: tank_distance   
+    unit_of_measurement: "cm"
+    accuracy_decimals: 1
+    icon: mdi:waves
+
+  - platform: template
+    name: "Tank Level"
+    id: tank_level  # <-- Add this line too
+    unit_of_measurement: "%"
+    accuracy_decimals: 0
+    lambda: |-
+      if (!id(tank_distance).has_state()) {
+        return NAN;
+      }
+
+      // Map the distance to percentage: adjust based on your tank size
+      float max_dist = 100.0; // distance when tank is empty (cm)
+      float min_dist = 20.0;  // distance when tank is full (cm)
+      float level = (max_dist - id(tank_distance).state) / (max_dist - min_dist) * 100.0;
+
+      if (level > 100.0) return 100.0;
+      if (level < 0.0) return 0.0;
+      return level;
+    update_interval: 10s
+    icon: mdi:water-percent
+
+
+external_components:
+  - source:
+      type: local
+      path: components
+    components: [sr04m2]
+
+
+binary_sensor:
+  - platform: template
+    name: "Tank Critical Level"
+    id: tank_critical_level
+    device_class: safety
+    lambda: |-
+      if (!id(tank_level).has_state()) {
+        return false;
+      }
+      return id(tank_level).state < 15.0;
+    on_press:
+      - logger.log: "⚠️ Tank level is critically low!"
+   # - switch.turn_on: alarm_buzzer
+
+
+# Enable web server for status page
+web_server:
+  port: 80
+
+captive_portal:
