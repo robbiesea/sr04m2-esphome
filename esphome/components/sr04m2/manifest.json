@@ -1,8 +1,0 @@
-{
-  "name": "SR04M2 Sensor",
-  "description": "SR04M2 Ultrasonic Distance Sensor via UART",
-  "domain": "sr04m2",
-  "dependencies": ["uart", "sensor"],
-  "codeowners": ["@robbiesea"],
-  "esphome_version": "2023.11.0"
-}
