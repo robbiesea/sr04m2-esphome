@@ -1,1 +1,1 @@
-# ✅ Install on AH esphome/components/sr04m2 folder
+from . import sensor  # Required to register the sensor
