@@ -11,7 +11,7 @@ SR04M2Sensor = sr04m2_ns.class_('SR04M2Sensor', sensor.Sensor, cg.Component, uar
 
 CONFIG_SCHEMA = sensor.sensor_schema(
     unit_of_measurement=UNIT_CENTIMETER,
-    icon=ICON_WAVES,
+    icon="mdi:waves",
     accuracy_decimals=1,
     device_class=DEVICE_CLASS_DISTANCE
 ).extend({
