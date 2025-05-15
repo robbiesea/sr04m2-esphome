@@ -1,1 +1,1 @@
-# Empty file to mark this directory as a module
+# ✅ Install on AH esphome/components/sr04m2 folder
