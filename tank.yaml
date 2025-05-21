@@ -1,0 +1,200 @@
+esphome:
+  name: frank-the-tank
+  friendly_name: "Frank the Tank"
+
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+
+# WiFi Configuration
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  # Fixed the IP configuration to match your gateway subnet
+  manual_ip:
+    static_ip: !secret static_ip
+    gateway: !secret gateway
+    subnet: !secret subnet
+
+  # Enable fallback hotspot if WiFi connection fails
+  ap:
+    ssid: "Frank The Tank Fallback"
+    password: "tankmaster123"
+    
+  # First time setup - use this if having connection issues
+  use_address:  !secret static_ip
+
+# I2C Bus Configuration with debug
+i2c:
+  sda: 21
+  scl: 22
+  scan: true
+  id: bus_a
+  frequency: 100kHz
+
+# Enable debug logging
+logger:
+  level: VERBOSE  # Increased global level to allow VERBOSE for components
+  baud_rate: 115200
+  logs:
+    i2c: DEBUG
+    display: INFO  # Reduced to avoid spam
+    sensor: DEBUG
+    uart: VERBOSE  # Now valid since global is VERBOSE
+    sr04m2: VERBOSE  # Now valid since global is VERBOSE
+
+# API Configuration for Home Assistant
+api:
+  encryption:
+    key: "SGaGLKg0Yop8wQ5F5U0pwnI2jSKPK78QvPg/dbOP3WE="
+
+ota:
+  platform: esphome
+  password: "637f2f35b83d4dfccf54395b44e70ea4"
+
+# Display Font
+font:
+  - file: "fonts/Roboto-Regular.ttf"
+    id: font1
+    size: 18
+
+# OLED Display Configuration
+display:
+  - platform: ssd1306_i2c
+    model: "SSD1306 128x64"
+    address: 0x3C
+    id: my_display
+    update_interval: 2s  # Increased to reduce performance warnings
+    lambda: |-
+      static int frame_count = 0;
+      frame_count++;
+      
+      it.fill(Color::BLACK);
+      
+      // Get display width for centering
+      int width = it.get_width();
+      
+      // Line 1: static marker with frame counter for debugging
+      std::string marker = "|  | " + std::to_string(frame_count);
+      int x1 = (width - (marker.length() * 6)) / 2;
+      it.print(x1, 0, id(font1), marker.c_str());
+      
+      // Check if we have valid sensor readings
+      bool have_distance = id(tank_distance).has_state() && !isnan(id(tank_distance).state);
+      bool have_level = id(tank_level).has_state() && !isnan(id(tank_level).state);
+      
+      // Line 2: tank distance + percent, if valid
+      if (have_distance && have_level) {
+        std::string line2 = std::to_string(int(id(tank_distance).state)) + " cm / " + std::to_string(int(id(tank_level).state)) + "%";
+        int x2 = (width - (line2.length() * 6)) / 2;
+        it.print(x2, 16, id(font1), line2.c_str());
+      } else if (have_distance) {
+        std::string distance_line = std::to_string(int(id(tank_distance).state)) + " cm";
+        int x2 = (width - (distance_line.length() * 6)) / 2;
+        it.print(x2, 16, id(font1), distance_line.c_str());
+      } else {
+        const char* waiting = "Reading...";
+        int x2 = (width - (strlen(waiting) * 6)) / 2;
+        it.print(x2, 16, id(font1), waiting);
+      }
+      
+      // Line 3: just tank level if available
+      if (have_level) {
+        std::string level_line = std::to_string(int(id(tank_level).state)) + "%";
+        int x3 = (width - (level_line.length() * 6)) / 2;
+        it.print(x3, 32, id(font1), level_line.c_str());
+      } else if (!have_distance) {
+        const char* sensor_err = "Sensor error";
+        int x3 = (width - (strlen(sensor_err) * 6)) / 2;
+        it.print(x3, 32, id(font1), sensor_err);
+      }
+      
+      // Line 4: Status line
+      const char* status = have_distance ? "Status: OK" : "Status: ERR";
+      int x4 = (width - (strlen(status) * 6)) / 2;
+      it.print(x4, 48, id(font1), status);
+
+# UART Configuration for SR04M2
+uart:
+  id: uart_bus
+  tx_pin: 13
+  rx_pin: 14
+  baud_rate: 9600
+
+# External components
+external_components:
+  - source:
+      type: local
+      path: external_components
+
+# Sensors
+sensor:
+  - platform: sr04m2
+    name: "Tank Distance"
+    id: tank_distance
+    uart_id: uart_bus
+    update_interval: 5s
+    unit_of_measurement: "cm"
+    device_class: distance
+    accuracy_decimals: 1
+    icon: mdi:waves
+    filters:
+      - lambda: |-
+          if (x < 2.0 || x > 450.0) {
+            ESP_LOGW("tank_distance", "Filtering out of range reading: %.1f cm", x);
+            return {};
+          }
+          return x;
+
+  - platform: template
+    name: "Tank Level"
+    id: tank_level
+    unit_of_measurement: "%"
+    accuracy_decimals: 0
+    device_class: battery
+    update_interval: 5s
+    lambda: |-
+      if (!id(tank_distance).has_state()) {
+        ESP_LOGW("tank_level", "No valid distance reading available");
+        return NAN;
+      }
+      
+      float distance = id(tank_distance).state;
+      
+      // Validate the distance reading is reasonable
+      if (distance < 1.0 || distance > 500.0) {
+        ESP_LOGW("tank_level", "Distance reading out of valid range: %.1f cm", distance);
+        return NAN;
+      }
+      
+      const float tank_height = 200.0f; // Change this to your actual tank height in cm
+      float level = ((tank_height - distance) / tank_height) * 100.0f;
+      
+      // Clamp to valid percentage range
+      if (level < 0.0f) level = 0.0f;
+      if (level > 100.0f) level = 100.0f;
+      
+      ESP_LOGD("tank_level", "Distance: %.1f cm, Level: %.1f%%", distance, level);
+      return level;
+
+# Binary sensors
+binary_sensor:
+  - platform: template
+    name: "Tank Critical Level"
+    id: tank_critical_level
+    device_class: safety
+    lambda: |-
+      if (!id(tank_level).has_state()) {
+        return false;
+      }
+      return id(tank_level).state < 15.0;
+    on_press:
+      - logger.log: "⚠️ Tank level is critically low!"
+
+# Enable web server for status page
+web_server:
+  port: 80
+
+# Enable captive portal
+captive_portal:
