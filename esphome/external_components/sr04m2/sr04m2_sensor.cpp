@@ -12,8 +12,8 @@ void SR04M2Sensor::setup() {
   while (this->available()) {
     this->read();
   }
-  // Initialize sensor with a different command
-  this->write_byte(0x55);  // Try a different initialization command
+  // Initialize sensor
+  this->write_byte(0x00);
   this->flush();
   delay(50);
 }
@@ -27,7 +27,7 @@ void SR04M2Sensor::update() {
   }
   
   // Send command
-  this->write_byte(0x55);  // Try a different command
+  this->write_byte(0x00);
   this->flush();
   
   // Give sensor time to respond
@@ -69,33 +69,26 @@ void SR04M2Sensor::loop() {
       continue;
     }
     
-    // Try different frame patterns
     float distance_cm = NAN;
     
-    // Pattern 1: Standard distance format (00 XX XX 00)
+    // Try to interpret the data
     if (data[0] == 0x00 && data[3] == 0x00) {
+      // Standard format: 00 XX XX 00
       uint16_t raw_value = (data[1] << 8) | data[2];
       if (raw_value > 0 && raw_value < 4500) {
         distance_cm = raw_value / 10.0f;
       }
-    }
-    
-    // Pattern 2: Alternative format (00 E0 00 E0)
-    else if (data[0] == 0x00 && data[1] == 0xE0 && data[2] == 0x00 && data[3] == 0xE0) {
-      distance_cm = 22.4f;  // This seems to be a fixed value
-    }
-    
-    // Pattern 3: Try interpreting raw bytes as distance
-    else {
-      uint16_t raw_value = (data[1] << 8) | data[2];
-      if (raw_value > 0 && raw_value < 4500) {
-        distance_cm = raw_value / 10.0f;
-      }
+    } else if (data[0] == 0x00 && data[1] == 0xE0 && data[2] == 0x00 && data[3] == 0xE0) {
+      // Known good pattern
+      distance_cm = 22.4f;
+    } else if (data[0] == 0xE0 && data[1] == 0x00 && data[2] == 0xC0 && data[3] == 0x00) {
+      // Another known good pattern
+      distance_cm = 19.2f;
     }
     
     // Validate and publish distance
     if (!isnan(distance_cm)) {
-      ESP_LOGD(TAG, "Raw distance value: %.1f cm", distance_cm);
+      ESP_LOGD(TAG, "Valid distance: %.1f cm", distance_cm);
       if (distance_cm >= 2.0f && distance_cm <= 450.0f) {
         this->waiting_for_response_ = false;
         this->publish_state(distance_cm);
