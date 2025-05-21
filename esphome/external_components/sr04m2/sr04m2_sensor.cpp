@@ -12,7 +12,11 @@ void SR04M2Sensor::setup() {
   while (this->available()) {
     this->read();
   }
+<<<<<<< Updated upstream
   // Try to wake up the sensor
+=======
+  // Initialize sensor
+>>>>>>> Stashed changes
   this->write_byte(0x00);
   this->flush();
   delay(100);
@@ -23,6 +27,7 @@ void SR04M2Sensor::update() {
   
   // Clear UART buffer first
   while (this->available()) {
+<<<<<<< Updated upstream
     uint8_t byte = this->read();
     ESP_LOGD(TAG, "Cleared byte: 0x%02X", byte);
   }
@@ -40,6 +45,17 @@ void SR04M2Sensor::update() {
   
   // Give sensor more time to respond
   delay(200);  // Increased delay to 200ms
+=======
+    this->read();
+  }
+  
+  // Send command
+  this->write_byte(0x00);  // Using 0x00 as it seems to work
+  this->flush();
+  
+  // Give sensor time to respond
+  delay(50);
+>>>>>>> Stashed changes
   
   this->waiting_for_response_ = true;
   this->request_time_ = millis();
@@ -57,6 +73,7 @@ void SR04M2Sensor::loop() {
   if (now - this->request_time_ > TIMEOUT_MS) {
     ESP_LOGW(TAG, "Timeout waiting for data after %dms", now - this->request_time_);
     ESP_LOGD(TAG, "UART available bytes: %d", this->available());
+<<<<<<< Updated upstream
     
     // Log any partial data we received
     if (this->available() > 0) {
@@ -67,20 +84,32 @@ void SR04M2Sensor::loop() {
       }
     }
     
+=======
+>>>>>>> Stashed changes
     this->waiting_for_response_ = false;
     this->publish_state(NAN);
     return;
   }
   
+<<<<<<< Updated upstream
   // Wait for complete 4-byte response
   if (this->available() >= 4) {
     this->waiting_for_response_ = false;
     
+=======
+  // Only process if we have at least 4 bytes
+  while (this->available() > 4) {
+    this->read(); // Discard oldest bytes
+  }
+  
+  if (this->available() == 4) {
+>>>>>>> Stashed changes
     uint8_t data[4];
     for (int i = 0; i < 4; i++) {
       data[i] = this->read();
     }
     
+<<<<<<< Updated upstream
     ESP_LOGD(TAG, "Complete frame: %02X %02X %02X %02X", data[0], data[1], data[2], data[3]);
     
     // Format 1: 0xFF + High byte + Low byte + Checksum
@@ -121,6 +150,23 @@ void SR04M2Sensor::loop() {
     
     ESP_LOGW(TAG, "Could not parse response - Invalid data format");
     this->publish_state(NAN);
+=======
+    ESP_LOGD(TAG, "Frame: %02X %02X %02X %02X", data[0], data[1], data[2], data[3]);
+    
+    if (data[0] == 0x00 && data[3] == 0x00) {
+      uint16_t raw_value = (data[1] << 8) | data[2];
+      if (raw_value > 0 && raw_value < 4500) {
+        float distance_cm = raw_value / 10.0f;
+        ESP_LOGD(TAG, "Valid distance: %.1f cm", distance_cm);
+        if (distance_cm >= 2.0f && distance_cm <= 450.0f) {
+          this->waiting_for_response_ = false;
+          this->publish_state(distance_cm);
+          return;
+        }
+      }
+    }
+    // If not valid, just ignore and wait for next frame
+>>>>>>> Stashed changes
   }
 }
 
@@ -132,4 +178,8 @@ void SR04M2Sensor::dump_config() {
 }
 
 } // namespace sr04m2
+<<<<<<< Updated upstream
 } // namespace esphome
+=======
+} // namespace esphome 
+>>>>>>> Stashed changes
