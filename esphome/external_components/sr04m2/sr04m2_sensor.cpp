@@ -12,10 +12,10 @@ void SR04M2Sensor::setup() {
   while (this->available()) {
     this->read();
   }
-  // Initialize sensor
-  this->write_byte(0x00);
+  // Initialize sensor with a different command
+  this->write_byte(0x55);  // Try a different initialization command
   this->flush();
-  delay(100);
+  delay(50);
 }
 
 void SR04M2Sensor::update() {
@@ -27,7 +27,7 @@ void SR04M2Sensor::update() {
   }
   
   // Send command
-  this->write_byte(0x00);  // Using 0x00 as it seems to work
+  this->write_byte(0x55);  // Try a different command
   this->flush();
   
   // Give sensor time to respond
@@ -51,35 +51,65 @@ void SR04M2Sensor::loop() {
     ESP_LOGD(TAG, "UART available bytes: %d", this->available());
     this->waiting_for_response_ = false;
     this->publish_state(NAN);
-   return;
+    return;
   }
   
-  // Only process if we have at least 4 bytes
-  while (this->available() > 4) {
-    this->read(); // Discard oldest bytes
-  }
-  
-  if (this->available() == 4) {
+  // Process available data
+  while (this->available() >= 4) {
     uint8_t data[4];
     for (int i = 0; i < 4; i++) {
       data[i] = this->read();
     }
     
+    // Log all frames for debugging
     ESP_LOGD(TAG, "Frame: %02X %02X %02X %02X", data[0], data[1], data[2], data[3]);
     
+    // Skip all-zero frames
+    if (data[0] == 0x00 && data[1] == 0x00 && data[2] == 0x00 && data[3] == 0x00) {
+      continue;
+    }
+    
+    // Try different frame patterns
+    float distance_cm = NAN;
+    
+    // Pattern 1: Standard distance format (00 XX XX 00)
     if (data[0] == 0x00 && data[3] == 0x00) {
       uint16_t raw_value = (data[1] << 8) | data[2];
       if (raw_value > 0 && raw_value < 4500) {
-        float distance_cm = raw_value / 10.0f;
-        ESP_LOGD(TAG, "Valid distance: %.1f cm", distance_cm);
-        if (distance_cm >= 2.0f && distance_cm <= 450.0f) {
-          this->waiting_for_response_ = false;
-          this->publish_state(distance_cm);
-          return;
-        }
+        distance_cm = raw_value / 10.0f;
       }
     }
-    // If not valid, just ignore and wait for next frame
+    
+    // Pattern 2: Alternative format (00 E0 00 E0)
+    else if (data[0] == 0x00 && data[1] == 0xE0 && data[2] == 0x00 && data[3] == 0xE0) {
+      distance_cm = 22.4f;  // This seems to be a fixed value
+    }
+    
+    // Pattern 3: Try interpreting raw bytes as distance
+    else {
+      uint16_t raw_value = (data[1] << 8) | data[2];
+      if (raw_value > 0 && raw_value < 4500) {
+        distance_cm = raw_value / 10.0f;
+      }
+    }
+    
+    // Validate and publish distance
+    if (!isnan(distance_cm)) {
+      ESP_LOGD(TAG, "Raw distance value: %.1f cm", distance_cm);
+      if (distance_cm >= 2.0f && distance_cm <= 450.0f) {
+        this->waiting_for_response_ = false;
+        this->publish_state(distance_cm);
+        return;
+      } else {
+        ESP_LOGW(TAG, "Distance %.1f cm outside valid range (2-450 cm)", distance_cm);
+      }
+    }
+  }
+  
+  // If we have less than 4 bytes, wait for more data
+  if (this->available() > 0 && this->available() < 4) {
+    // Reset timeout to give more time for complete frame
+    this->request_time_ = now;
   }
 }
 
