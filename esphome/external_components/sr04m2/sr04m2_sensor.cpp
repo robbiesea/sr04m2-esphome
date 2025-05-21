@@ -12,11 +12,7 @@ void SR04M2Sensor::setup() {
   while (this->available()) {
     this->read();
   }
-<<<<<<< Updated upstream
-  // Try to wake up the sensor
-=======
   // Initialize sensor
->>>>>>> Stashed changes
   this->write_byte(0x00);
   this->flush();
   delay(100);
@@ -27,25 +23,6 @@ void SR04M2Sensor::update() {
   
   // Clear UART buffer first
   while (this->available()) {
-<<<<<<< Updated upstream
-    uint8_t byte = this->read();
-    ESP_LOGD(TAG, "Cleared byte: 0x%02X", byte);
-  }
-  
-  // Try different command sequences
-  static uint8_t commands[] = {0x55, 0x01, 0x00, 0xFF};
-  static uint8_t cmd_index = 0;
-  
-  uint8_t cmd = commands[cmd_index];
-  cmd_index = (cmd_index + 1) % sizeof(commands);
-  
-  ESP_LOGD(TAG, "Sending command: 0x%02X", cmd);
-  this->write_byte(cmd);
-  this->flush();
-  
-  // Give sensor more time to respond
-  delay(200);  // Increased delay to 200ms
-=======
     this->read();
   }
   
@@ -55,7 +32,6 @@ void SR04M2Sensor::update() {
   
   // Give sensor time to respond
   delay(50);
->>>>>>> Stashed changes
   
   this->waiting_for_response_ = true;
   this->request_time_ = millis();
@@ -73,84 +49,22 @@ void SR04M2Sensor::loop() {
   if (now - this->request_time_ > TIMEOUT_MS) {
     ESP_LOGW(TAG, "Timeout waiting for data after %dms", now - this->request_time_);
     ESP_LOGD(TAG, "UART available bytes: %d", this->available());
-<<<<<<< Updated upstream
-    
-    // Log any partial data we received
-    if (this->available() > 0) {
-      ESP_LOGD(TAG, "Partial data received:");
-      while (this->available()) {
-        uint8_t byte = this->read();
-        ESP_LOGD(TAG, "  Byte: 0x%02X", byte);
-      }
-    }
-    
-=======
->>>>>>> Stashed changes
     this->waiting_for_response_ = false;
     this->publish_state(NAN);
-    return;
+   return;
   }
   
-<<<<<<< Updated upstream
-  // Wait for complete 4-byte response
-  if (this->available() >= 4) {
-    this->waiting_for_response_ = false;
-    
-=======
   // Only process if we have at least 4 bytes
   while (this->available() > 4) {
     this->read(); // Discard oldest bytes
   }
   
   if (this->available() == 4) {
->>>>>>> Stashed changes
     uint8_t data[4];
     for (int i = 0; i < 4; i++) {
       data[i] = this->read();
     }
     
-<<<<<<< Updated upstream
-    ESP_LOGD(TAG, "Complete frame: %02X %02X %02X %02X", data[0], data[1], data[2], data[3]);
-    
-    // Format 1: 0xFF + High byte + Low byte + Checksum
-    if (data[0] == 0xFF) {
-      uint8_t checksum = (data[0] + data[1] + data[2]) & 0xFF;
-      if (checksum == data[3]) {
-        uint16_t distance_mm = (data[1] << 8) | data[2];
-        float distance_cm = distance_mm / 10.0f;
-        ESP_LOGD(TAG, "Format 1 - Distance: %.1f cm", distance_cm);
-        if (distance_cm >= 2.0f && distance_cm <= 450.0f) {
-          this->publish_state(distance_cm);
-          return;
-        }
-      } else {
-        ESP_LOGW(TAG, "Format 1 checksum mismatch: expected 0x%02X, got 0x%02X", checksum, data[3]);
-      }
-    }
-    
-    // Format 2: High byte + Low byte + 0x00 + 0x00
-    if (data[2] == 0x00 && data[3] == 0x00) {
-      uint16_t distance_mm = (data[0] << 8) | data[1];
-      float distance_cm = distance_mm / 10.0f;
-      ESP_LOGD(TAG, "Format 2 - Distance: %.1f cm", distance_cm);
-      if (distance_cm >= 2.0f && distance_cm <= 450.0f) {
-        this->publish_state(distance_cm);
-        return;
-      }
-    }
-    
-    // Format 3: Try raw value
-    uint16_t raw_value = (data[0] << 8) | data[1];
-    if (raw_value > 20 && raw_value < 4500) {  // Reasonable mm range
-      float distance_cm = raw_value / 10.0f;
-      ESP_LOGD(TAG, "Format 3 - Distance: %.1f cm", distance_cm);
-      this->publish_state(distance_cm);
-      return;
-    }
-    
-    ESP_LOGW(TAG, "Could not parse response - Invalid data format");
-    this->publish_state(NAN);
-=======
     ESP_LOGD(TAG, "Frame: %02X %02X %02X %02X", data[0], data[1], data[2], data[3]);
     
     if (data[0] == 0x00 && data[3] == 0x00) {
@@ -166,7 +80,6 @@ void SR04M2Sensor::loop() {
       }
     }
     // If not valid, just ignore and wait for next frame
->>>>>>> Stashed changes
   }
 }
 
@@ -178,8 +91,4 @@ void SR04M2Sensor::dump_config() {
 }
 
 } // namespace sr04m2
-<<<<<<< Updated upstream
 } // namespace esphome
-=======
-} // namespace esphome 
->>>>>>> Stashed changes
