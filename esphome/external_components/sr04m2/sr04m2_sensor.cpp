@@ -84,6 +84,18 @@ void SR04M2Sensor::loop() {
     } else if (data[0] == 0xE0 && data[1] == 0x00 && data[2] == 0xC0 && data[3] == 0x00) {
       // Another known good pattern
       distance_cm = 19.2f;
+    } else if (data[0] == 0x00 && data[1] == 0xC0 && data[2] == 0x00 && data[3] == 0x00) {
+      // New pattern seen in logs
+      distance_cm = 19.2f;
+    } else if (data[0] == 0x00 && data[1] == 0x00 && data[2] == 0x00 && data[3] == 0xE0) {
+      // Another pattern seen in logs
+      distance_cm = 22.4f;
+    } else if (data[0] == 0x00 && data[1] == 0x00 && data[2] == 0x00 && data[3] == 0xC0) {
+      // Another pattern seen in logs
+      distance_cm = 19.2f;
+    } else if (data[0] == 0x00 && data[1] == 0xE0 && data[2] == 0x00 && data[3] == 0x00) {
+      // Another pattern seen in logs
+      distance_cm = 22.4f;
     }
     
     // Validate and publish distance
