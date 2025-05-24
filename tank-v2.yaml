@@ -1,0 +1,139 @@
+esphome:
+  name: frank-the-tank
+  friendly_name: "Frank the Tank"
+
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+
+# WiFi Configuration
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  manual_ip:
+    static_ip: !secret static_ip
+    gateway: !secret gateway
+    subnet: !secret subnet
+  ap:
+    ssid: "Frank The Tank Fallback"
+    password: "tankmaster123"
+  use_address: !secret static_ip
+
+# I2C Bus Configuration with debug
+i2c:
+  sda: 21
+  scl: 22
+  scan: true
+  id: bus_a
+  frequency: 100kHz
+
+# Enable debug logging
+logger:
+  level: VERBOSE
+  baud_rate: 115200
+  logs:
+    i2c: DEBUG
+    display: DEBUG
+    sensor: VERBOSE
+    component: VERBOSE
+    main: VERBOSE
+
+# API Configuration for Home Assistant
+api:
+  encryption:
+    key: "SGaGLKg0Yop8wQ5F5U0pwnI2jSKPK78QvPg/dbOP3WE="
+
+ota:
+  platform: esphome
+  password: "637f2f35b83d4dfccf54395b44e70ea4"
+
+# Display Fonts
+font:
+  - file: "fonts/Roboto-Regular.ttf"
+    id: font1
+    size: 18
+  - file: "fonts/Roboto-Regular.ttf"
+    id: font_medium
+    size: 14
+
+# UART Configuration
+uart:
+  id: uart_bus
+  tx_pin: 18
+  rx_pin: 19
+  baud_rate: 19200  # Changed to 19200 for 8MHz crystal
+
+# Template sensor for distance measurement
+sensor:
+  - platform: template
+    name: "Tank Level"
+    id: tank_level
+    update_interval: 1s
+    lambda: |-
+      static uint32_t last_command_time = 0;
+      static uint8_t command_index = 0;
+      uint8_t commands[] = {0x55, 0xAA, 0x00, 0xFF};
+      
+      // Send command every 500ms
+      if (millis() - last_command_time > 500) {
+        uint8_t cmd = commands[command_index];
+        id(uart_bus).write_byte(cmd);
+        command_index = (command_index + 1) % 4;
+        last_command_time = millis();
+        
+        ESP_LOGD("tank", "Sent command: 0x%02X", cmd);
+      }
+      
+      // Try to read UART response
+      if (id(uart_bus).available() >= 4) {
+        uint8_t data[4];
+        for (int i = 0; i < 4; i++) {
+          if (!id(uart_bus).read_byte(&data[i])) {
+            ESP_LOGD("tank", "Failed to read byte %d", i);
+            return NAN;
+          }
+        }
+        
+        ESP_LOGD("tank", "Received: 0x%02X 0x%02X 0x%02X 0x%02X", 
+                 data[0], data[1], data[2], data[3]);
+        
+        // Try different byte orders
+        float distances[3];
+        distances[0] = (data[1] << 8 | data[2]) / 10.0;  // [Header][High][Low][Checksum]
+        distances[1] = (data[0] << 8 | data[1]) / 10.0;  // [High][Low][Header][Checksum]
+        distances[2] = (data[2] << 8 | data[1]) / 10.0;  // [Low][High][Header][Checksum]
+        
+        // Return first reasonable value
+        for (int i = 0; i < 3; i++) {
+          if (distances[i] > 0 && distances[i] < 500) {
+            return distances[i];
+          }
+        }
+      }
+      
+      return NAN;
+    filters:
+      - quantile:
+          window_size: 3
+          send_every: 5
+          send_first_at: 1
+          quantile: 0.9
+
+# Display reading with more debug info
+display:
+  - platform: ssd1306_i2c
+    model: "SSD1306 128x64"
+    address: 0x3C
+    id: my_display
+    update_interval: 2s
+    lambda: |-
+      it.printf(0, 0, id(font_medium), "Tank: %.1fcm", id(tank_level).state);
+      it.printf(0, 20, id(font_medium), "Raw: %d", id(tank_level).raw_state);
+
+# Web Server for device access
+web_server:
+  port: 80
+
+# Enable captive portal fallback
+captive_portal:

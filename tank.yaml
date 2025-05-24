@@ -121,6 +121,15 @@ uart:
   tx_pin: 13
   rx_pin: 14
   baud_rate: 9600
+  data_bits: 8
+  parity: NONE
+  stop_bits: 1
+  debug:
+    direction: BOTH
+    dummy_receiver: false
+    after:
+      bytes: 4
+      timeout: 100ms
 
 # External components
 external_components:

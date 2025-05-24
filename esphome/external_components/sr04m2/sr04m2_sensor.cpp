@@ -12,10 +12,21 @@ void SR04M2Sensor::setup() {
   while (this->available()) {
     this->read();
   }
-  // Initialize sensor
-  this->write_byte(0x00);
+  
+  // Try a more complete initialization sequence
+  this->write_byte(0xFF);  // Reset command
   this->flush();
-  delay(50);
+  delay(100);
+  
+  this->write_byte(0x55);  // Configuration command
+  this->flush();
+  delay(100);
+  
+  this->write_byte(0x00);  // Start measurement command
+  this->flush();
+  delay(100);
+  
+  ESP_LOGD(TAG, "Initialization sequence completed");
 }
 
 void SR04M2Sensor::update() {
@@ -26,8 +37,8 @@ void SR04M2Sensor::update() {
     this->read();
   }
   
-  // Send command
-  this->write_byte(0x00);
+  // Send measurement command
+  this->write_byte(0x55);  // Try a different command
   this->flush();
   
   // Give sensor time to respond
@@ -77,25 +88,47 @@ void SR04M2Sensor::loop() {
       uint16_t raw_value = (data[1] << 8) | data[2];
       if (raw_value > 0 && raw_value < 4500) {
         distance_cm = raw_value / 10.0f;
+        ESP_LOGD(TAG, "Standard format distance: %.1f cm", distance_cm);
       }
     } else if (data[0] == 0x00 && data[1] == 0xE0 && data[2] == 0x00 && data[3] == 0xE0) {
       // Known good pattern
       distance_cm = 22.4f;
+      ESP_LOGD(TAG, "Pattern 1 distance: %.1f cm", distance_cm);
     } else if (data[0] == 0xE0 && data[1] == 0x00 && data[2] == 0xC0 && data[3] == 0x00) {
       // Another known good pattern
       distance_cm = 19.2f;
+      ESP_LOGD(TAG, "Pattern 2 distance: %.1f cm", distance_cm);
     } else if (data[0] == 0x00 && data[1] == 0xC0 && data[2] == 0x00 && data[3] == 0x00) {
       // New pattern seen in logs
       distance_cm = 19.2f;
+      ESP_LOGD(TAG, "Pattern 3 distance: %.1f cm", distance_cm);
     } else if (data[0] == 0x00 && data[1] == 0x00 && data[2] == 0x00 && data[3] == 0xE0) {
       // Another pattern seen in logs
       distance_cm = 22.4f;
+      ESP_LOGD(TAG, "Pattern 4 distance: %.1f cm", distance_cm);
     } else if (data[0] == 0x00 && data[1] == 0x00 && data[2] == 0x00 && data[3] == 0xC0) {
       // Another pattern seen in logs
       distance_cm = 19.2f;
+      ESP_LOGD(TAG, "Pattern 5 distance: %.1f cm", distance_cm);
     } else if (data[0] == 0x00 && data[1] == 0xE0 && data[2] == 0x00 && data[3] == 0x00) {
       // Another pattern seen in logs
       distance_cm = 22.4f;
+      ESP_LOGD(TAG, "Pattern 6 distance: %.1f cm", distance_cm);
+    } else {
+      // Try to interpret any non-zero bytes as distance
+      for (int i = 0; i < 3; i++) {
+        if (data[i] != 0x00 && data[i] != 0xC0 && data[i] != 0xE0) {
+          uint16_t raw_value = (data[i] << 8) | data[i + 1];
+          if (raw_value > 0 && raw_value < 4500) {
+            float temp_distance = raw_value / 10.0f;
+            if (temp_distance >= 2.0f && temp_distance <= 450.0f) {
+              distance_cm = temp_distance;
+              ESP_LOGD(TAG, "Raw byte distance at pos %d: %.1f cm", i, distance_cm);
+              break;
+            }
+          }
+        }
+      }
     }
     
     // Validate and publish distance

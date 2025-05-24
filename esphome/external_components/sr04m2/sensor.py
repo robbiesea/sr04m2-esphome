@@ -27,6 +27,9 @@ CONFIG_SCHEMA = (
     )
     .extend({
         cv.Optional(CONF_UPDATE_INTERVAL, default="5s"): cv.update_interval,
+        cv.Optional("min_distance", default=2.0): cv.float_,
+        cv.Optional("max_distance", default=450.0): cv.float_,
+        cv.Optional("timeout", default="1s"): cv.positive_time_period_milliseconds,
     })
     .extend(uart.UART_DEVICE_SCHEMA)
 )
@@ -36,3 +39,11 @@ async def to_code(config):
     var = await sensor.new_sensor(config)
     await cg.register_component(var, config)
     await uart.register_uart_device(var, config)
+    
+    # Add configuration values
+    if "min_distance" in config:
+        cg.add(var.set_min_distance(config["min_distance"]))
+    if "max_distance" in config:
+        cg.add(var.set_max_distance(config["max_distance"]))
+    if "timeout" in config:
+        cg.add(var.set_timeout(config["timeout"]))
