@@ -1,0 +1,293 @@
+esphome:
+  name: frank-the-tank
+  friendly_name: "Frank the Tank"
+
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+
+# Enable logging
+logger:
+  level: DEBUG
+  baud_rate: 115200
+
+# WiFi Configuration
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  manual_ip:
+    static_ip: !secret static_ip
+    gateway: !secret gateway
+    subnet: !secret subnet
+   
+
+
+# API Configuration for Home Assistant
+api:
+  encryption:
+    key: !secret encryption_key_frank
+ota:
+  platform: esphome
+  password:  !secret ota_password
+
+
+# Display Fonts
+font:
+  - file: "fonts/Roboto-Regular.ttf"
+    id: font1
+    size: 18
+  - file: "fonts/Roboto-Regular.ttf"
+    id: font_medium
+    size: 14
+
+
+# I2C Bus Configuration with debug
+i2c:
+  sda: 21
+  scl: 22
+  scan: true
+  id: bus_a
+  frequency: 100kHz
+
+
+# Configure the ultrasonic sensor
+sensor:
+  - platform: ultrasonic
+    trigger_pin: GPIO14
+    echo_pin: GPIO13
+    name: "Tank Level"
+    id: tank_level
+    unit_of_measurement: "cm"
+    filters:
+      - lambda: |-
+          if (x < 0.05) {
+            return NAN;
+          }
+          // Convert meters to centimeters, apply scale and offset
+          float measured = (x * 100.0);
+          return (measured * 0.849) - 1.886;
+      - sliding_window_moving_average:
+          window_size: 10
+          send_every: 10
+    accuracy_decimals: 1
+    update_interval: 1000ms
+    state_class: measurement
+    timeout: 4.0m
+    pulse_time: 10us
+
+  - platform: template
+    name: "Tank Fullness"
+    id: tank_fullness
+    unit_of_measurement: "%"
+    accuracy_decimals: 1
+    lambda: |-
+      float distance = id(tank_level).state;
+      if (distance > 152) distance = 152;
+      if (distance < 10) distance = 0;
+      return ((152 - distance) / (152 - 0)) * 100.0;
+    update_interval: 2s
+
+  - platform: template
+    name: "Tank Volume"
+    id: tank_volume
+    unit_of_measurement: "L"
+    accuracy_decimals: 1
+    lambda: |-
+      const float width = 100.0;
+      const float length = 100.0;
+      float distance = id(tank_level).state;
+      if (distance > 152) distance = 152;
+      if (distance < 10) distance = 0;
+      float water_height = 152.0 - distance;
+      if (water_height < 0) water_height = 0;
+      return (width * length * water_height) / 1000.0;
+    update_interval: 2s
+
+# Optional: Add a status binary sensor
+binary_sensor:
+  - platform: status
+    name: "Ultrasonic Sensor Status"
+
+# Optional: Add some text sensors for debugging
+text_sensor:
+  - platform: wifi_info
+    ip_address:
+      name: IP Address
+      id: wifi_info_ip
+    ssid:
+      name: Connected SSID
+    bssid:
+      name: Connected BSSID
+    mac_address:
+      name: MAC Address 
+
+# Display reading with tank status
+display:
+  - platform: ssd1306_i2c
+    model: "SSD1306 128x64"
+    address: 0x3C
+    id: my_display
+    update_interval: 100ms
+    auto_clear_enabled: true
+    brightness: 1.0
+    contrast: 100%
+    flip_x: false
+    flip_y: true
+    reset_pin: GPIO23
+    external_vcc: false
+    pages:
+      - id: page1
+        lambda: |-
+          float distance = id(tank_level).state;
+          uint32_t now = millis();
+          
+          if (distance > 100) {
+            // Tank is empty - show ded
+            it.image(0, 0, id(ded_img), COLOR_ON, COLOR_OFF);
+            ESP_LOGD("display", "Showing ded image");
+          } else if (distance >= 60) {
+            // Tank is between empty and full - show middy with animations
+            auto img = id(middy_img);
+            int interval = (now / 15000) % 2;
+            if (now % 15000 < 9000) { // First 9s of each 15s interval
+              // 3s middy, 3s middy_left, 3s middy_right
+              int frame = (now % 9000) / 3000;
+              if (frame == 0) {
+                img = id(middy_img);
+                ESP_LOGD("display", "Middy center frame");
+              } else if (frame == 1) {
+                img = id(middy_left_img);
+                ESP_LOGD("display", "Middy left frame");
+              } else {
+                img = id(middy_right_img);
+                ESP_LOGD("display", "Middy right frame");
+              }
+            } else if (now % 15000 < 9900) { // Next 0.9s for blink animation
+              int frame = ((now % 900) / 300);
+              if (frame == 0) {
+                img = id(middy_blink1_img);
+                ESP_LOGD("display", "Middy blink1 frame");
+              } else if (frame == 1) {
+                img = id(middy_blink2_img);
+                ESP_LOGD("display", "Middy blink2 frame");
+              } else {
+                img = id(middy_blink1_img);
+                ESP_LOGD("display", "Middy blink1 frame");
+              }
+            } else {
+              ESP_LOGD("display", "Showing regular middy");
+            }
+            it.image(0, 0, img, COLOR_ON, COLOR_OFF);
+          } else {
+            // Tank is full - show happy with wink/blink
+            auto img = id(happy_img);
+        
+            // Every 15s, do a wink or blink animation
+            if ((now / 15000) % 2 == 0) { // Even 15s intervals: wink
+              if (now % 15000 < 225) { // First 0.225s of each 15s interval
+                int frame = (now % 225) / 75;
+                if (frame == 0) {
+                  img = id(happy_wink1_img);
+                  ESP_LOGD("display", "Happy wink1 frame");
+                } else if (frame == 1) {
+                  img = id(happy_wink2_img);
+                  ESP_LOGD("display", "Happy wink2 frame");
+                } else {
+                  img = id(happy_wink1_img);
+                  ESP_LOGD("display", "Happy wink1 frame");
+                }
+              }
+            } else { // Odd 15s intervals: blink
+              if (now % 15000 < 450) { // First 0.45s of each 15s interval
+                int frame = (now % 450) / 90;
+                if (frame == 0) {
+                  img = id(happy_blink1_img);
+                  ESP_LOGD("display", "Happy blink1 frame");
+                } else if (frame == 1) {
+                  img = id(happy_blink2_img);
+                  ESP_LOGD("display", "Happy blink2 frame");
+                } else if (frame == 2) {
+                  img = id(happy_blink3_img);
+                  ESP_LOGD("display", "Happy blink3 frame");
+                } else if (frame == 3) {
+                  img = id(happy_blink2_img);
+                  ESP_LOGD("display", "Happy blink2 frame");
+                } else {
+                  img = id(happy_blink1_img);
+                  ESP_LOGD("display", "Happy blink1 frame");
+                }
+              }
+            }
+        
+            it.image(0, 0, img, COLOR_ON, COLOR_OFF);
+          }
+
+image:
+  - file: "images/happy.xbm"
+    id: happy_img
+    type: BINARY
+    resize: 128x64
+    dither: NONE
+  - file: "images/happy_wink1.xbm"
+    id: happy_wink1_img
+    type: BINARY
+    resize: 128x64
+    dither: NONE
+  - file: "images/happy_wink2.xbm"
+    id: happy_wink2_img
+    type: BINARY
+    resize: 128x64
+    dither: NONE
+  - file: "images/happy_blink1.xbm"
+    id: happy_blink1_img
+    type: BINARY
+    resize: 128x64
+    dither: NONE
+  - file: "images/happy_blink2.xbm"
+    id: happy_blink2_img
+    type: BINARY
+    resize: 128x64
+    dither: NONE
+  - file: "images/happy_blink3.xbm"
+    id: happy_blink3_img
+    type: BINARY
+    resize: 128x64
+    dither: NONE
+  - file: "images/middy.xbm"
+    id: middy_img
+    type: BINARY
+    resize: 128x64
+    dither: NONE
+  - file: "images/middy_left.xbm"
+    id: middy_left_img
+    type: BINARY
+    resize: 128x64
+    dither: NONE
+  - file: "images/middy_right.xbm"
+    id: middy_right_img
+    type: BINARY
+    resize: 128x64
+    dither: NONE
+  - file: "images/middy_blink1.xbm"
+    id: middy_blink1_img
+    type: BINARY
+    resize: 128x64
+    dither: NONE
+  - file: "images/middy_blink2.xbm"
+    id: middy_blink2_img
+    type: BINARY
+    resize: 128x64
+    dither: NONE
+  - file: "images/ded.xbm"
+    id: ded_img
+    type: BINARY
+    resize: 128x64
+    dither: NONE
+
+# Web Server for device access
+web_server:
+  port: 80
+
+# Enable captive portal fallback
+captive_portal:
