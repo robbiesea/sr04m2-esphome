@@ -25,7 +25,21 @@ esphome:
                 then:
                   - component.update: battery_last_checked
       - delay: 2s  # Ensure all data is sent
-      - deep_sleep.enter: deep_sleep_ctrl
+      - if:
+          condition:
+            lambda: 'return !id(stay_awake_switch).state;'  # Only sleep if stay awake is OFF
+          then:
+            - deep_sleep.enter: deep_sleep_ctrl
+          else:
+            - logger.log: "Stay awake mode enabled - not entering deep sleep"
+            - delay: 30s  # Wait a bit before checking again
+            - if:
+                condition:
+                  lambda: 'return !id(stay_awake_switch).state;'
+                then:
+                  - deep_sleep.enter: deep_sleep_ctrl
+                else:
+                  - logger.log: "Stay awake mode still enabled - continuing to stay awake"
 
 esp32:
   board: esp32dev
@@ -166,6 +180,18 @@ sensor:
       - filter_out: nan
     update_interval: never  # Only update when triggered
 
+  - platform: template
+    name: "Stay Awake Control"
+    id: stay_awake_control
+    unit_of_measurement: "State"
+    accuracy_decimals: 0
+    availability:  # Disable availability tracking for battery device
+      topic: none
+    lambda: |-
+      // Default to 0 (sleep mode) if no MQTT message received
+      return 0;
+    update_interval: never  # Only update when triggered
+
 # Binary sensors for status
 binary_sensor:
   - platform: status
@@ -228,6 +254,8 @@ text_sensor:
       return {"Critical"};
     update_interval: 60s
 
+
+
 # Web Server for device access
 web_server:
   port: 80
@@ -236,3 +264,54 @@ web_server:
     password: !secret ota_password  # Reuse OTA password for simplicity
 
 # captive_portal:
+
+# Switch to control deep sleep behavior
+
+# Helper switch to check stay awake state
+switch:
+  - platform: template
+    name: "Stay Awake Mode"
+    id: stay_awake_switch
+    lambda: |-
+      float control = id(stay_awake_control).state;
+      return control == 1;
+    optimistic: true
+    availability:  # Disable availability tracking for battery device
+      topic: none
+    on_turn_on:
+      - logger.log: "Stay awake mode enabled - device will not sleep"
+      - mqtt.publish:
+          topic: "caravan-battery/stay_awake/state"
+          payload: "1"
+          retain: true
+      - component.update: stay_awake_control
+    on_turn_off:
+      - logger.log: "Stay awake mode disabled - device will sleep normally"
+      - mqtt.publish:
+          topic: "caravan-battery/stay_awake/state"
+          payload: "0"
+          retain: true
+      - component.update: stay_awake_control
+      - delay: 5s  # Give time for final data transmission
+      - deep_sleep.enter: deep_sleep_ctrl
+
+# Periodic check for stay awake mode (runs every 5 minutes when awake)
+interval:
+  - interval: 5min
+    then:
+      - if:
+          condition:
+            lambda: 'return id(stay_awake_switch).state;'
+          then:
+            - logger.log: "Stay awake mode active - keeping device awake"
+            - component.update: battery_voltage  # Update readings while awake
+            - component.update: battery_percentage
+            - component.update: battery_status
+            - if:
+                condition:
+                  lambda: 'return id(sntp_time).now().is_valid();'
+                then:
+                  - component.update: battery_last_checked
+          else:
+            - logger.log: "Stay awake mode inactive - entering deep sleep"
+            - deep_sleep.enter: deep_sleep_ctrl
