@@ -1,0 +1,100 @@
+esphome:
+  name: garage-door-sensor
+  friendly_name: "Garage Door"
+
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+
+# Enable logging
+logger:
+  level: DEBUG
+  baud_rate: 115200
+
+# WiFi Configuration
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  
+  manual_ip:
+   static_ip: !secret static_ip_garage   
+   gateway: !secret gateway
+   subnet: !secret subnet
+ 
+
+# API Configuration for Home Assistant
+api:
+  encryption:
+    key: !secret encryption_key_garage
+
+ota:
+  platform: esphome
+  password: !secret ota_password
+
+# Configure the HC-SR04 ultrasonic sensor
+sensor:
+  - platform: ultrasonic
+    trigger_pin: GPIO14
+    echo_pin: GPIO13
+    name: "Garage Door Distance"
+    id: garage_distance
+    unit_of_measurement: "m"
+    filters:
+      - lambda: |-
+          ESP_LOGD("garage_sensor", "Raw distance reading: %.3f meters", x);
+          return x;
+    accuracy_decimals: 2
+    update_interval: 5s
+    state_class: measurement
+    timeout: 4.0m
+    pulse_time: 10us
+
+# GPIO Output for relay trigger
+output:
+  - platform: gpio
+    pin: GPIO4
+    id: garage_relay_output
+
+# Switch for garage door trigger (appears as button in HA)
+switch:
+  - platform: template
+    id: garage_door_trigger
+    name: "Garage Door Trigger"
+    icon: "mdi:garage"
+    turn_on_action:
+      - output.turn_on: garage_relay_output
+      - delay: 500ms
+      - output.turn_off: garage_relay_output
+      - switch.turn_off: garage_door_trigger
+
+# Binary sensor for garage door open/closed state
+binary_sensor:
+  - platform: template
+    name: "Garage Door Open"
+    id: garage_door_open
+    lambda: |-
+      float distance = id(garage_distance).state;
+      ESP_LOGD("garage_sensor", "Binary sensor check - Distance: %.3f meters", distance);
+      if (isnan(distance)) {
+        ESP_LOGD("garage_sensor", "Distance is NaN, returning unknown state");
+        return {};  // Return unknown state if sensor reading is invalid
+      }
+      bool is_open = distance > 1.0;
+      ESP_LOGD("garage_sensor", "Distance %.3f meters - Door is %s", distance, is_open ? "OPEN" : "CLOSED");
+      return is_open;  // Open if distance > 1m, closed otherwise
+    filters:
+      - delayed_on: 5s  # Prevent false triggers
+      - delayed_off: 5s
+    device_class: garage_door
+
+  - platform: status
+    name: "Garage Door Sensor Status"
+ 
+
+# Web Server for device access
+web_server:
+  port: 80
+
+# Enable captive portal fallback
+captive_portal: 

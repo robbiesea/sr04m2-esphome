@@ -1,0 +1,238 @@
+esphome:
+  name: caravan-battery
+  friendly_name: "Caravan Battery Monitor"
+  min_version: 2024.6.0  # Compatible with older Dashboard versions
+  on_boot:
+    priority: -100
+    then:
+      - delay: 2s  # Let WiFi stabilize
+      - component.update: battery_voltage  # Force voltage reading first
+      - delay: 3s  # Wait for reading to process
+      - component.update: battery_percentage
+      - component.update: battery_status
+      - delay: 8s  # Longer wait for time sync
+      - if:
+          condition:
+            lambda: 'return id(sntp_time).now().is_valid();'
+          then:
+            - component.update: battery_last_checked
+          else:
+            - logger.log: "Time not yet synchronized, skipping timestamp update"
+            - delay: 5s  # Wait a bit more and try again
+            - if:
+                condition:
+                  lambda: 'return id(sntp_time).now().is_valid();'
+                then:
+                  - component.update: battery_last_checked
+      - delay: 2s  # Ensure all data is sent
+      - deep_sleep.enter: deep_sleep_ctrl
+
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+
+# Enable logging
+logger:
+ # level: INFO  # Reduced from DEBUG for battery savings
+ # baud_rate: 115200
+  level: ERROR
+  baud_rate: 0
+
+# Disable onboard LED to save power
+# status_led:
+
+# WiFi Configuration
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  manual_ip:
+    static_ip: !secret static_ip_caravan
+    gateway: !secret gateway
+    subnet: !secret subnet
+  # Power save mode for battery optimization
+  power_save_mode: light
+
+# MQTT Configuration for Home Assistant
+mqtt:
+  broker: !secret ha_broker
+  username: mqttuser
+  password: !secret mqtt_pass
+  discovery: true  # Enable auto-discovery for dashboard visibility
+  discovery_prefix: homeassistant
+  discovery_retain: true  # Retain discovery messages
+  reboot_timeout: 0s
+  topic_prefix: caravan-battery
+
+# API Configuration for Home Assistant
+api:
+  encryption:
+    key: !secret encryption_key_caravan
+
+ota:
+  platform: esphome
+  password: !secret ota_password
+
+deep_sleep:
+  id: deep_sleep_ctrl
+  sleep_duration: 4h  # 4-hour intervals for battery monitoring
+  wakeup_pin: GPIO33  # Optional: use a button for manual wake
+
+# Configure the voltage sensor
+sensor:
+  - platform: adc
+    pin: GPIO34  # ADC1 pin - works reliably with WiFi (GPIO13 won't work with WiFi)
+    name: "Battery Voltage"
+    id: battery_voltage
+    unit_of_measurement: "V"
+    accuracy_decimals: 2
+    update_interval: 2s  # Faster updates during wake period
+    expire_after: 5h  # Keep value for longer than sleep cycle
+    force_update: true  # Always send updates even if value unchanged
+    availability:  # Disable availability tracking for battery device
+      topic: none
+    attenuation: 11db  # For measuring up to ~3.6V on the pin
+    filters:
+      - multiply: 3.64  # Calibration factor for voltage module (adjust based on testing)
+      # Voltage modules typically output 0-3.3V representing 0-15V+ battery range
+      # Test and adjust this multiplier to match actual battery voltage
+      - lambda: |-
+          if (x < 0.5) {
+            return NAN;  // Filter out obviously wrong readings
+          }
+          return x;
+      - sliding_window_moving_average:
+          window_size: 5  # Smooth out voltage fluctuations
+          send_every: 5
+      - filter_out: nan
+      - delta: 0.05  # Only send if change is > 0.05V
+    state_class: measurement
+    device_class: voltage
+    on_value:
+      - component.update: battery_percentage  # Trigger percentage calculation
+      - component.update: battery_status      # Trigger status calculation
+
+  - platform: template
+    name: "Battery Percentage"
+    id: battery_percentage
+    unit_of_measurement: "%"
+    accuracy_decimals: 1
+    expire_after: 5h  # Keep value for longer than sleep cycle
+    force_update: true  # Always send updates even if value unchanged
+    availability:  # Disable availability tracking for battery device
+      topic: none
+    lambda: |-
+      float voltage = id(battery_voltage).state;
+      if (isnan(voltage)) return NAN;
+      
+      // 12V Lead-acid battery voltage curve (adjust for your battery type)
+      if (voltage >= 12.6) return 100.0;
+      if (voltage >= 12.5) return 90.0;
+      if (voltage >= 12.42) return 80.0;
+      if (voltage >= 12.32) return 70.0;
+      if (voltage >= 12.20) return 60.0;
+      if (voltage >= 12.06) return 50.0;
+      if (voltage >= 11.9) return 40.0;
+      if (voltage >= 11.75) return 30.0;
+      if (voltage >= 11.58) return 20.0;
+      if (voltage >= 11.31) return 10.0;
+      if (voltage >= 10.5) return 5.0;
+      return 0.0;
+    filters:
+      - filter_out: nan
+      - delta: 1.0  # Only send if change is > 1%
+    update_interval: never  # Only update when triggered
+    state_class: measurement
+    device_class: battery
+
+  - platform: template
+    name: "Battery Status"
+    id: battery_status
+    accuracy_decimals: 0
+    expire_after: 5h  # Keep value for longer than sleep cycle
+    force_update: true  # Always send updates even if value unchanged
+    availability:  # Disable availability tracking for battery device
+      topic: none
+    lambda: |-
+      float voltage = id(battery_voltage).state;
+      if (isnan(voltage)) return NAN;
+      
+      // Return status codes: 3=Good, 2=Fair, 1=Low, 0=Critical
+      if (voltage >= 12.4) return 3;  // Good (>12.4V)
+      if (voltage >= 12.1) return 2;  // Fair (12.1-12.4V)
+      if (voltage >= 11.8) return 1;  // Low (11.8-12.1V)
+      return 0;  // Critical (<11.8V)
+    filters:
+      - filter_out: nan
+    update_interval: never  # Only update when triggered
+
+# Binary sensors for status
+binary_sensor:
+  - platform: status
+    name: "Battery Monitor Status"
+    availability:  # Disable availability tracking for battery device
+      topic: none
+
+  - platform: template
+    name: "Battery Low Warning"
+    availability:  # Disable availability tracking for battery device
+      topic: none
+    lambda: |-
+      float voltage = id(battery_voltage).state;
+      if (isnan(voltage)) return false;
+      return voltage < 12.1;  // True if battery is low
+    filters:
+      - delayed_on: 30s  # Avoid false alarms from voltage spikes
+
+# Time sync for last checked timestamp
+time:
+  - platform: sntp
+    id: sntp_time
+    timezone: Australia/Melbourne  # Melbourne, Australia timezone
+    servers:
+      - 0.pool.ntp.org
+      - 1.pool.ntp.org
+      - time.nist.gov
+    on_time_sync:
+      - logger.log: "Time synchronized with NTP server"
+      - component.update: battery_last_checked
+
+text_sensor:
+  - platform: template
+    name: "Battery Last Checked"
+    id: battery_last_checked
+    availability:  # Disable availability tracking for battery device
+      topic: none
+    lambda: |-
+      auto time = id(sntp_time).now();
+      if (!time.is_valid()) {
+        return {"Time not synced"};
+      }
+      char str[30];
+      time_t curr_time = time.timestamp;
+      strftime(str, sizeof(str), "%H:%M %d/%m", localtime(&curr_time));
+      return { str };
+    update_interval: never  # Only update when triggered or on time sync
+
+  - platform: template
+    name: "Battery Status Text"
+    availability:  # Disable availability tracking for battery device
+      topic: none
+    lambda: |-
+      float status = id(battery_status).state;
+      if (isnan(status)) return {"Unknown"};
+      
+      if (status >= 3) return {"Good"};
+      if (status >= 2) return {"Fair"};
+      if (status >= 1) return {"Low"};
+      return {"Critical"};
+    update_interval: 60s
+
+# Web Server for device access
+web_server:
+  port: 80
+  auth:
+    username: admin
+    password: !secret ota_password  # Reuse OTA password for simplicity
+
+# captive_portal:

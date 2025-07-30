@@ -1,0 +1,205 @@
+esphome:
+  name: tank-smalls
+  friendly_name: "Water Tank: Smalls"
+  on_boot:
+    priority: -100
+    then:
+      - delay: 2s  # Let WiFi stabilize
+      - component.update: tank_level  # Force ultrasonic reading first
+      - delay: 3s  # Wait for reading to process
+      - component.update: tank_fullness
+      - component.update: tank_volume  
+      - delay: 8s  # Longer wait for time sync
+      - if:
+          condition:
+            lambda: 'return id(sntp_time).now().is_valid();'
+          then:
+            - component.update: tank_last_checked
+          else:
+            - logger.log: "Time not yet synchronized, skipping timestamp update"
+            - delay: 5s  # Wait a bit more and try again
+            - if:
+                condition:
+                  lambda: 'return id(sntp_time).now().is_valid();'
+                then:
+                  - component.update: tank_last_checked
+      - delay: 2s  # Ensure all data is sent
+      - deep_sleep.enter: deep_sleep_ctrl
+
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+
+# Enable logging
+logger:
+ # level: INFO  # Reduced from DEBUG for battery savings
+ # baud_rate: 115200
+  level: ERROR
+  baud_rate: 0
+
+# Disable onboard LED to save power
+# Commenting out status_led completely disables it
+# status_led:
+
+# WiFi Configuration
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  manual_ip:
+    static_ip: !secret static_ip_smalls
+    gateway: !secret gateway
+    subnet: !secret subnet
+  # Power save mode for battery optimization
+  power_save_mode: light
+
+# MQTT Configuration for Home Assistant
+mqtt:
+  broker: !secret ha_broker
+  username: mqttuser
+  password: !secret mqtt_pass
+  discovery: true  # Enable auto-discovery for dashboard visibility
+  discovery_prefix: homeassistant
+  discovery_retain: true  # Retain discovery messages
+  reboot_timeout: 0s
+  topic_prefix: tank-smalls
+
+# API Configuration for Home Assistant
+api:
+  encryption:
+    key: !secret encryption_key_smalls
+
+ota:
+  platform: esphome
+  password:  !secret ota_password
+
+deep_sleep:
+  id: deep_sleep_ctrl
+  sleep_duration: 30min
+  wakeup_pin: GPIO33  # Optional: use a float switch or reed sensor for wake
+
+
+# Configure the ultrasonic sensor
+sensor:
+  - platform: ultrasonic
+    trigger_pin: GPIO14
+    echo_pin: GPIO13
+    name: "Tank Level"
+    id: tank_level
+    unit_of_measurement: "cm"
+    update_interval: 2s  # Faster updates during wake period
+    expire_after: 35min  # Keep value for longer than sleep cycle
+    force_update: true  # Always send updates even if value unchanged
+    availability:  # Disable availability tracking for battery device
+      topic: none
+    filters:
+      - lambda: |-
+          if (x < 0.05) {
+            return NAN;
+          }
+          // Convert meters to centimeters, apply scale and offset
+          float measured = (x * 100.0);
+          return (measured * 0.849) - 1.886;
+      - sliding_window_moving_average:
+          window_size: 3  # Smaller window for faster response
+          send_every: 3
+      - filter_out: nan
+      - delta: 0.5  # Only send if change is > 0.5cm
+    accuracy_decimals: 1
+    state_class: measurement
+    timeout: 4.0m
+    pulse_time: 10us
+    on_value:
+      - component.update: tank_fullness  # Trigger fullness calculation
+      - component.update: tank_volume    # Trigger volume calculation
+
+  - platform: template
+    name: "Tank Fullness"
+    id: tank_fullness
+    unit_of_measurement: "%"
+    accuracy_decimals: 1
+    expire_after: 35min  # Keep value for longer than sleep cycle
+    force_update: true  # Always send updates even if value unchanged
+    availability:  # Disable availability tracking for battery device
+      topic: none
+    lambda: |-
+      float distance = id(tank_level).state;
+      if (isnan(distance)) return NAN;
+      if (distance > 152) distance = 152;
+      if (distance < 10) distance = 0;
+      return ((152 - distance) / (152 - 0)) * 100.0;
+    filters:
+      - filter_out: nan
+      - delta: 1.0  # Only send if change is > 1%
+    update_interval: never  # Only update when triggered
+
+  - platform: template
+    name: "Tank Volume"
+    id: tank_volume
+    unit_of_measurement: "L"
+    accuracy_decimals: 1
+    expire_after: 35min  # Keep value for longer than sleep cycle
+    force_update: true  # Always send updates even if value unchanged
+    availability:  # Disable availability tracking for battery device
+      topic: none
+    lambda: |-
+      const float width = 100.0;
+      const float length = 100.0;
+      float distance = id(tank_level).state;
+      if (isnan(distance)) return NAN;
+      if (distance > 152) distance = 152;
+      if (distance < 10) distance = 0;
+      float water_height = 152.0 - distance;
+      if (water_height < 0) water_height = 0;
+      return (width * length * water_height) / 1000.0;
+    filters:
+      - filter_out: nan
+      - delta: 5.0  # Only send if change is > 5L
+    update_interval: never  # Only update when triggered
+
+# Optional: Add a status binary sensor
+binary_sensor:
+  - platform: status
+    name: "Ultrasonic Sensor Status"
+    availability:  # Disable availability tracking for battery device
+      topic: none
+
+# Last Checked 
+time:
+  - platform: sntp
+    id: sntp_time
+    timezone: Australia/Melbourne  # Melbourne, Australia timezone
+    servers:
+      - 0.pool.ntp.org
+      - 1.pool.ntp.org
+      - time.nist.gov
+    on_time_sync:
+      - logger.log: "Time synchronized with NTP server"
+      - component.update: tank_last_checked
+
+text_sensor:
+  - platform: template
+    name: "Tank Last Checked"
+    id: tank_last_checked
+    availability:  # Disable availability tracking for battery device
+      topic: none
+    lambda: |-
+      auto time = id(sntp_time).now();
+      if (!time.is_valid()) {
+        return {"Time not synced"};
+      }
+      char str[30];
+      time_t curr_time = time.timestamp;
+      strftime(str, sizeof(str), "%H:%M %d/%m", localtime(&curr_time));
+      return { str };
+    update_interval: never  # Only update when triggered or on time sync
+
+# Web Server for device access
+web_server:
+  port: 80
+  auth:
+    username: admin
+    password: !secret ota_password  # Reuse OTA password for simplicity
+
+# captive_portal:
+
